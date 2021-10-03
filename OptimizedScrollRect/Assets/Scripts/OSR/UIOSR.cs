@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 using Object = UnityEngine.Object;
@@ -34,6 +36,8 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     private Action<TData> _elementOnClickAction;
     private List<TData> _dataList = new List<TData>();
     private List<TContainer> _containerList = new List<TContainer>();
+    private Vector2 _previousCellSize = Vector2.zero;
+    private bool _isDragging;
     #endregion
 
     #region Properties
@@ -94,6 +98,12 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
             return _totalLineCount;
         }
     }
+
+    public bool IsDragging {
+        get {
+            return _isDragging;
+        }
+    }
     #endregion
 
     #region Mono behaviour Hooks
@@ -103,10 +113,22 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         onValueChanged.AddListener(OnValueChanged);
     }
 
-    // TODO
-    // Refresh if bound of recttranform changed ?
-    //private void Update() {
-    //}
+
+    private void Update() {
+        bool cellSizeChanged = IsCellSizeChanged();
+
+        if (cellSizeChanged) {
+            Refresh();
+        }
+
+        _previousCellSize = _cellSize;
+    }
+
+    protected override void OnDisable() {
+        base.OnDisable();
+
+        StopAllCoroutines();
+    }
 
     protected override void OnDestroy() {
         base.OnDestroy();
@@ -120,6 +142,21 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         ShowAndHideContainer();
     }
     #endregion
+
+    public override void OnBeginDrag(PointerEventData eventData) {
+        base.OnBeginDrag(eventData);
+
+        _isDragging = true;
+        StopAllCoroutines();
+    }
+
+    public override void OnEndDrag(PointerEventData eventData) {
+        base.OnEndDrag(eventData);
+
+        _isDragging = false;
+    }
+
+
 
     #region APIs
     public void SetElementOnClickAction(Action<TData> action) {
@@ -138,14 +175,26 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         _dataList.Remove(data);
     }
 
-    // TODO
-    //public void MoveToData(TData data) { 
+    public void MoveToIndex(int dataIndex, bool skipTween = false) {
+        if (_dataList == null) {
+            return;
+        }
 
-    //}
+        if (dataIndex < 0) {
+            return;
+        }
 
-    //public void MoveToIndex() { 
+        if (dataIndex >= _dataList.Count) {
+            return;
+        }
 
-    //}
+        // Try to move target to center
+        // Calculate lineindex of target
+
+        int lineIndex = dataIndex / ElementCountPerLine;
+
+        MoveToLine(lineIndex, skipTween);
+    }
 
     public void Refresh() {
         int dataCount = _dataList.Count;
@@ -179,6 +228,14 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     #endregion
 
     #region Internal Methods
+    private bool IsCellSizeChanged() {
+        if (_previousCellSize == Vector2.zero) {
+            return false;
+        }
+
+        return _cellSize != _previousCellSize;
+    }
+
     private void RefreshContainer() {
         int maxContainerCount = 1 + 1;
         float remainLength = ViewportLengthDraggableDir - CellSizeDraggableDir;
@@ -190,9 +247,9 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         }
 
         // Reuse instead re-create all
-        for (int i = 0; i < maxContainerCount; i++) {
+        for (int containerIndex = 0; containerIndex < maxContainerCount; containerIndex++) {
             // Create new if not enough
-            if (i >= _containerList.Count) {
+            if (containerIndex >= _containerList.Count) {
                 GameObject newContainerGo = new GameObject();
                 newContainerGo.transform.SetParent(content);
                 newContainerGo.AddComponent<RectTransform>();
@@ -209,8 +266,8 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
             }
 
             // Container settings
-            UIOSRContainer<TData, TElement> container = _containerList[i];
-            container.name = string.Format("Container_{0}", i);
+            UIOSRContainer<TData, TElement> container = _containerList[containerIndex];
+            container.name = string.Format("Container_{0}", containerIndex);
             container.SetData(_dataList);
 
             RectTransform rect = container.GetComponent<RectTransform>();
@@ -218,15 +275,16 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
             rect.anchorMax = new Vector2(0, 1);
             rect.anchorMin = new Vector2(0, 1);
             rect.pivot = Vector2.up;
-            rect.anchoredPosition = GetContainerPosition(i);
+            rect.anchoredPosition = GetContainerPosition(containerIndex);
             rect.sizeDelta = vertical ?
                 new Vector2(ViewportLengthUndraggableDir, CellSizeDraggableDir) :
                 new Vector2(CellSizeDraggableDir, ViewportLengthUndraggableDir);
         }
 
         // Remove unused 
-        for (int i = maxContainerCount; i < _containerList.Count; i++) {
-            Destroy(_containerList[i]);
+        for (int containerIndex = _containerList.Count - 1; containerIndex >= maxContainerCount; containerIndex--) {
+            Destroy(_containerList[containerIndex].gameObject);
+            _containerList.RemoveAt(containerIndex);
         }
     }
 
@@ -304,6 +362,69 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
 
         for (int i = 0; i < unhandledContainerIndex.Count; i++) {
             _containerList[unhandledContainerIndex[i]].gameObject.SetActive(false);
+        }
+    }
+
+    private void MoveToLine(int lineIndex, bool skipTween) {
+        // NOTE:
+        // Modify normalized position of scroll rect
+        // If vertical, value of 'verticalNormalizedPosition' is 0 means scroll view at Bottom
+        //              value of 'verticalNormalizedPosition' is 1 means scroll view at Top
+        // If horizontal, value of 'horizontalNormalizedPosition' 0 means scroll view at Most Left
+        //                value of 'horizontalNormalizedPosition' 1 means scroll view at Most Right
+
+        float totalLength = vertical ? content.rect.height : content.rect.width;
+        float viewableLength = vertical ? viewport.rect.height : viewport.rect.width;
+
+        float draggableStart = vertical ? (-totalLength + viewableLength / 2) : viewableLength / 2; // Position which normalized position is 0
+        float draggableEnd = vertical ? -viewableLength / 2 : (totalLength - viewableLength / 2); // Position which normalized position is 1
+
+        // Center position
+        Vector2 containerPosition = GetContainerPosition(lineIndex);
+        float targetPosition = vertical ?
+            containerPosition.y - CellSize.y / 2 :
+            containerPosition.x + CellSize.x / 2;
+
+        // Normalized position calculation
+        float nPosition = 0;
+        if (targetPosition < draggableStart) {
+            nPosition = 0;
+        }
+        else if (targetPosition > draggableEnd) {
+            nPosition = 1;
+        }
+        else {
+            nPosition = Mathf.InverseLerp(draggableStart, draggableEnd, targetPosition);
+        }
+
+        StartCoroutine(MoveToPosition(nPosition, skipTween));
+    }
+
+    private IEnumerator MoveToPosition(float targetNPosition, bool skipTween) {
+        float currentNPosition = GetNormalizedPosition();
+
+        if (!skipTween) {
+            while (Mathf.Abs(currentNPosition - targetNPosition) > 0.0005f) {
+                currentNPosition = Mathf.Lerp(currentNPosition, targetNPosition, 0.05f);
+                SetNormalizedPosition(currentNPosition);
+
+                yield return new WaitForEndOfFrame();
+            }
+        }
+
+        SetNormalizedPosition(targetNPosition);
+    }
+
+    private float GetNormalizedPosition() {
+        return vertical ? verticalNormalizedPosition : horizontalNormalizedPosition;
+    }
+
+    private void SetNormalizedPosition(float nPosition) {
+        if (vertical) {
+            verticalNormalizedPosition = nPosition;
+        }
+        else {
+            horizontalNormalizedPosition = nPosition;
         }
     }
     #endregion

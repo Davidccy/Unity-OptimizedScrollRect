@@ -3,13 +3,16 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class UITest : MonoBehaviour {
+public class UISample : MonoBehaviour {
     #region Serialized Fields
-    [SerializeField] private Button _btn = null;
+    [SerializeField] private Button _btnCreate = null;
     [SerializeField] private Button _btnPlus = null;
     [SerializeField] private Button _btnMinus = null;
+    [SerializeField] private Button _btnMove = null;
 
-    [SerializeField] private TMP_InputField _input = null;
+    [SerializeField] private TMP_InputField _inputCreate = null;
+    [SerializeField] private TMP_InputField _inputMove = null;
+    [SerializeField] private Toggle _toggleMove = null;
 
     [SerializeField] private UITemplateDataScrollRect _horScrollRect = null;
     [SerializeField] private UITemplateDataScrollRect _verScrollRect = null;
@@ -24,9 +27,10 @@ public class UITest : MonoBehaviour {
 
     #region Mono Behaviour Hooks
     private void Awake() {
-        _btn.onClick.AddListener(ButtonOnClick);
+        _btnCreate.onClick.AddListener(ButtonCreateOnClick);
         _btnPlus.onClick.AddListener(ButtonPlusOnClick);
         _btnMinus.onClick.AddListener(ButtonMinusOnClick);
+        _btnMove.onClick.AddListener(ButtoMoveOnClick);
     }
 
     private void OnEnable() {
@@ -35,15 +39,16 @@ public class UITest : MonoBehaviour {
     }
 
     private void OnDestroy() {
-        _btn.onClick.RemoveAllListeners();
+        _btnCreate.onClick.RemoveAllListeners();
         _btnPlus.onClick.RemoveAllListeners();
         _btnMinus.onClick.RemoveAllListeners();
+        _btnMove.onClick.RemoveAllListeners();
     }
     #endregion
 
     #region Button Handlings
-    private void ButtonOnClick() {
-        string inputStr = _input.text;
+    private void ButtonCreateOnClick() {
+        string inputStr = _inputCreate.text;
         if (string.IsNullOrEmpty(inputStr) || !int.TryParse(inputStr, out int dataCount)) {
             return;
         }
@@ -86,6 +91,16 @@ public class UITest : MonoBehaviour {
 
         _verScrollRect.AssignData(_dataList);
         _verScrollRect.Refresh();
+    }
+
+    private void ButtoMoveOnClick() {
+        string inputStr = _inputMove.text;
+        if (string.IsNullOrEmpty(inputStr) || !int.TryParse(inputStr, out int dataIndex)) {
+            return;
+        }
+
+        _horScrollRect.MoveToIndex(dataIndex, _toggleMove.isOn);
+        _verScrollRect.MoveToIndex(dataIndex, _toggleMove.isOn);
     }
     #endregion
 

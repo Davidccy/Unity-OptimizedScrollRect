@@ -53,9 +53,10 @@ public class UIOSRContainer<TData, TElement> : MonoBehaviour where TData : OSRDa
             element.SetOnClickAction(_onClickAction);
         }
 
-        // Hide unused elements
-        for (int i = _elementPerLine; i < _elementList.Count; i++) {
-            _elementList[i].Show(false);
+        // Remove unused elements
+        for (int i = _elementList.Count - 1; i >= _elementPerLine; i--) {
+            Destroy(_elementList[i].gameObject);
+            _elementList.RemoveAt(i);
         }
     }
     #endregion
