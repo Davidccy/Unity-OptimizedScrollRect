@@ -25,29 +25,33 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     #region Serialized Fields
     [Header("New Feature")]
     [SerializeField] private TElement _elementGO = null;
-    [SerializeField] private Vector2 _cellSize = Vector2.one; // NOTE: Value of cell size (x or y) must larger or equal to 1
+
+    [Header("Size Options")]
+    [SerializeField] private Vector2 _elementSize = Vector2.one; // NOTE: Value of element size (x or y) must larger or equal to 1
     [SerializeField] private float _containerSpacing = 0; // NOTE: Can be negative
     [SerializeField] private float _elementSpacing = 0; // NOTE: Can be negative
     #endregion
 
     #region Internal Fields
-    private int _elementCountPerLine = 0;
-    private int _totalLineCount = 0;
     private Action<TData> _elementOnClickAction;
     private List<TData> _dataList = new List<TData>();
     private List<TContainer> _containerList = new List<TContainer>();
-    private Vector2 _previousCellSize = Vector2.zero;
-    private bool _isDragging;
+
+    // Size cache
+    private Vector2 _previousElementSize = Vector2.zero;
+    private float _previousContainerSpacing = 0;
+    private float _previousElementSpacing = 0;
+    private Vector2 _previousViewportSize = Vector2.zero;
     #endregion
 
     #region Properties
-    private Vector2 CellSize {
+    private Vector2 ElementSize {
         get {
-            if (_cellSize.x <= 0 || _cellSize.y <= 0) {
-                _cellSize = new Vector2(Mathf.Max(_cellSize.x, 1), Mathf.Max(_cellSize.y, 1));
+            if (_elementSize.x <= 0 || _elementSize.y <= 0) {
+                _elementSize = new Vector2(Mathf.Max(_elementSize.x, 1), Mathf.Max(_elementSize.y, 1));
             }
 
-            return _cellSize;
+            return _elementSize;
         }
     }
 
@@ -69,15 +73,15 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         }
     }
 
-    private float CellSizeUndraggableDir {
+    private float ElementSizeUndraggableDir {
         get {
-            return vertical ? CellSize.x : CellSize.y;
+            return vertical ? ElementSize.x : ElementSize.y;
         }
     }
 
-    private float CellSizeDraggableDir {
+    private float ElementSizeDraggableDir {
         get {
-            return vertical ? CellSize.y : CellSize.x;
+            return vertical ? ElementSize.y : ElementSize.x;
         }
     }
 
@@ -88,21 +92,18 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     }
 
     public int ElementCountPerLine {
-        get {
-            return _elementCountPerLine;
-        }
+        get;
+        private set;
     }
 
-    public int TotleLineCount {
-        get {
-            return _totalLineCount;
-        }
+    public int TotalLineCount {
+        get;
+        private set;
     }
 
     public bool IsDragging {
-        get {
-            return _isDragging;
-        }
+        get;
+        private set;
     }
     #endregion
 
@@ -113,15 +114,16 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         onValueChanged.AddListener(OnValueChanged);
     }
 
-
     private void Update() {
-        bool cellSizeChanged = IsCellSizeChanged();
+        if (!Application.isPlaying) {
+            return;
+        }
 
-        if (cellSizeChanged) {
+        if (IsSizeOptionChanged()) {
             Refresh();
         }
 
-        _previousCellSize = _cellSize;
+        UpdateSizeCache();        
     }
 
     protected override void OnDisable() {
@@ -143,20 +145,20 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     }
     #endregion
 
+    #region Override IDragHandler
     public override void OnBeginDrag(PointerEventData eventData) {
         base.OnBeginDrag(eventData);
 
-        _isDragging = true;
+        IsDragging = true;
         StopAllCoroutines();
     }
 
     public override void OnEndDrag(PointerEventData eventData) {
         base.OnEndDrag(eventData);
 
-        _isDragging = false;
+        IsDragging = false;
     }
-
-
+    #endregion
 
     #region APIs
     public void SetElementOnClickAction(Action<TData> action) {
@@ -176,6 +178,7 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     }
 
     public void MoveToIndex(int dataIndex, bool skipTween = false) {
+        // Check target data exist or not
         if (_dataList == null) {
             return;
         }
@@ -199,20 +202,21 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     public void Refresh() {
         int dataCount = _dataList.Count;
 
-        // Count per line
-        _elementCountPerLine = 1;
-        float remainedLength = ViewportLengthUndraggableDir - CellSizeUndraggableDir;
+        // Calculate element count per line
+        ElementCountPerLine = 1;
+        float remainedLength = ViewportLengthUndraggableDir - ElementSizeUndraggableDir;
         if (remainedLength > 0) {
-            _elementCountPerLine += (int) (remainedLength / (_elementSpacing + CellSizeUndraggableDir));
+            ElementCountPerLine += (int) (remainedLength / (_elementSpacing + ElementSizeUndraggableDir));
         }
 
-        // Total count of line
-        _totalLineCount = dataCount / _elementCountPerLine;
-        if (dataCount % _elementCountPerLine != 0) {
-            _totalLineCount += 1;
+        // Calculate total count of line
+        TotalLineCount = dataCount / ElementCountPerLine;
+        if (dataCount % ElementCountPerLine != 0) {
+            TotalLineCount += 1;
         }
 
-        float contentLengthDraggableDir = CellSizeDraggableDir + (_totalLineCount - 1) * (_containerSpacing + CellSizeDraggableDir);
+        // Update recttransform of content
+        float contentLengthDraggableDir = ElementSizeDraggableDir + (TotalLineCount - 1) * (_containerSpacing + ElementSizeDraggableDir);
         content.anchorMax = new Vector2(0, 1);
         content.anchorMin = new Vector2(0, 1);
         content.sizeDelta = vertical ? 
@@ -228,20 +232,46 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
     #endregion
 
     #region Internal Methods
-    private bool IsCellSizeChanged() {
-        if (_previousCellSize == Vector2.zero) {
-            return false;
+    private bool IsSizeOptionChanged() {
+        if (_previousElementSize != ElementSize) {
+            return true;
         }
 
-        return _cellSize != _previousCellSize;
+        if (_previousContainerSpacing != _containerSpacing) {
+            return true;
+        }
+
+        if (_previousElementSpacing != _elementSpacing) {
+            return true;
+        }
+
+        if (IsViewportSizeChanged()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private void UpdateSizeCache() {
+        _previousElementSize = ElementSize;
+        _previousContainerSpacing = _containerSpacing;
+        _previousElementSpacing = _elementSpacing;
+
+        if (IsViewportSizeChanged()) {
+            _previousViewportSize = new Vector2(viewport.rect.width, viewport.rect.height);
+        }
+    }
+
+    private bool IsViewportSizeChanged() {
+        return _previousViewportSize.x != viewport.rect.width || _previousViewportSize.x != viewport.rect.height;
     }
 
     private void RefreshContainer() {
         int maxContainerCount = 1 + 1;
-        float remainLength = ViewportLengthDraggableDir - CellSizeDraggableDir;
+        float remainLength = ViewportLengthDraggableDir - ElementSizeDraggableDir;
         if (remainLength > 0) {
-            maxContainerCount += (int) (remainLength / (_containerSpacing + CellSizeDraggableDir));
-            if (remainLength % (_containerSpacing + CellSizeDraggableDir) != 0) {
+            maxContainerCount += (int) (remainLength / (_containerSpacing + ElementSizeDraggableDir));
+            if (remainLength % (_containerSpacing + ElementSizeDraggableDir) != 0) {
                 maxContainerCount += 1;
             }
         }
@@ -277,8 +307,17 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
             rect.pivot = Vector2.up;
             rect.anchoredPosition = GetContainerPosition(containerIndex);
             rect.sizeDelta = vertical ?
-                new Vector2(ViewportLengthUndraggableDir, CellSizeDraggableDir) :
-                new Vector2(CellSizeDraggableDir, ViewportLengthUndraggableDir);
+                new Vector2(ViewportLengthUndraggableDir, ElementSizeDraggableDir) :
+                new Vector2(ElementSizeDraggableDir, ViewportLengthUndraggableDir);
+
+            if (vertical) {
+                HorizontalLayoutGroup hlg = container.GetComponent<HorizontalLayoutGroup>();
+                hlg.spacing = _elementSpacing;
+            }
+            else {
+                VerticalLayoutGroup vlg = container.GetComponent<VerticalLayoutGroup>();
+                vlg.spacing = _elementSpacing;
+            }
         }
 
         // Remove unused 
@@ -302,26 +341,26 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
 
     private int GetLineIndex(float distance) {
         // Distance is length from pivot point with draggable direction
-        float cellLength = vertical ? CellSize.y : CellSize.x;
+        float elementLength = vertical ? ElementSize.y : ElementSize.x;
 
         int index = 0;
         if (vertical) {
             if (distance < -_containerSpacing) {
-                index = Mathf.CeilToInt(distance / (_containerSpacing + cellLength));
+                index = Mathf.CeilToInt(distance / (_containerSpacing + elementLength));
             }
             else {
-                if (distance > _containerSpacing + cellLength) {
-                    index = Mathf.FloorToInt(distance / (_containerSpacing + cellLength));
+                if (distance > _containerSpacing + elementLength) {
+                    index = Mathf.FloorToInt(distance / (_containerSpacing + elementLength));
                 }
             }
         }
         else {
             if (distance > _containerSpacing) {
-                index = -Mathf.CeilToInt(distance / (_containerSpacing + cellLength));
+                index = -Mathf.CeilToInt(distance / (_containerSpacing + elementLength));
             }
             else {
-                if (distance < -(_containerSpacing + cellLength)) {
-                    index = -Mathf.CeilToInt(distance / (_containerSpacing + cellLength));
+                if (distance < -(_containerSpacing + elementLength)) {
+                    index = -Mathf.CeilToInt(distance / (_containerSpacing + elementLength));
                 }
             }
         }
@@ -331,8 +370,8 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
 
     private Vector2 GetContainerPosition(int lineIndex) {
         return vertical ?
-            new Vector2(0, -lineIndex * (_containerSpacing + CellSizeDraggableDir)) :
-            new Vector2(lineIndex * (_containerSpacing + CellSizeDraggableDir), 0);
+            new Vector2(0, -lineIndex * (_containerSpacing + ElementSizeDraggableDir)) :
+            new Vector2(lineIndex * (_containerSpacing + ElementSizeDraggableDir), 0);
     }
 
     private void ShowContainer(int topLineIndex, int bottomLineIndex) {
@@ -342,7 +381,7 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         }
 
         for (int lineIndex = topLineIndex; lineIndex <= bottomLineIndex; lineIndex++) {
-            if (lineIndex < 0 || lineIndex >= _totalLineCount) {
+            if (lineIndex < 0 || lineIndex >= TotalLineCount) {
                 continue;
             }
 
@@ -382,8 +421,8 @@ public class UIOSR<TData, TContainer, TElement> : ScrollRect
         // Center position
         Vector2 containerPosition = GetContainerPosition(lineIndex);
         float targetPosition = vertical ?
-            containerPosition.y - CellSize.y / 2 :
-            containerPosition.x + CellSize.x / 2;
+            containerPosition.y - ElementSize.y / 2 :
+            containerPosition.x + ElementSize.x / 2;
 
         // Normalized position calculation
         float nPosition = 0;
